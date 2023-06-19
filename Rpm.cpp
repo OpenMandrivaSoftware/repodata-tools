@@ -242,15 +242,26 @@ String Rpm::appstreamMd() const {
 			QDomDocument dom;
 			dom.setContent(it.value());
 			QDomElement root = dom.documentElement();
+			if(root.tagName() == "application") {
+				// Seems to be an old version of the standard, spotted in
+				// brasero-3.12.3, Clementine-1.4.0-rc2, empathy-3.12.14
+				root.setTagName("component");
+				root.setAttribute("type", "desktop-application");
+			}
 			if(root.tagName() != "component") {
-				std::cerr << "Appstream metadata with document element != component found: " << it.key() << " in " << _filename << std::endl;
+				std::cerr << "Appstream metadata with document element \"" << root.tagName() << "\" rather than \"component\" found: " << it.key() << " in " << _filename << std::endl;
 				continue;
 			}
 			// This is not strictly correct according to the standard, but a forgotten
 			// type="desktop" seems to be far more common than a legitimately untyped
 			// metainfo file.
 			if(!root.hasAttribute("type"))
-				root.setAttribute("type",  "desktop");
+				root.setAttribute("type",  "desktop-application");
+
+			// This is extremely common (in fact, more so than desktop-application),
+			// but seems to be wrong according to the spec
+			if(root.attribute("type") == "desktop")
+				root.setAttribute("type", "desktop-application");
 
 			QDomElement id = root.firstChildElement("id");
 			if(id.isNull()) {
