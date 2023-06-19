@@ -547,7 +547,7 @@ static bool updateMetadata(String const &path) {
 	return true;
 }
 
-static bool createMetadata(String const &path) {
+static bool createMetadata(String const &path, String const &origin="openmandriva") {
 	QDir d(path);
 	if(!d.exists()) {
 		std::cerr << path << " not found, ignoring" << std::endl;
@@ -586,7 +586,7 @@ static bool createMetadata(String const &path) {
 		return false;
 	}
 	appstream.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-			"<components origin=\"openmandriva\" version=\"0.14\">\n");
+			"<components origin=\"" + origin + "\" version=\"0.14\">\n");
 	Archive appstreamIcons(rd.filePath("appstream-icons.tar"));
 
 	QTextStream primaryTs(&primary);
@@ -673,10 +673,13 @@ int main(int argc, char **argv) {
 
 	QCommandLineParser cp;
 	cp.setApplicationDescription("RPM repository metadata creator");
-	cp.addOption({{"u", "update"}, QCoreApplication::translate("main", "Update metadata instead of regenerating it")});
+	cp.addOptions({
+		{{"u", "update"}, QCoreApplication::translate("main", "Update metadata instead of generating it")},
+		{{"o", "origin"}, QCoreApplication::translate("main", "Origin identifier to be used (only while generating from scratch)"), "origin"},
+	});
 	cp.addHelpOption();
 	cp.addVersionOption();
-	cp.addPositionalArgument("path", QCoreApplication::translate("main", "Directory containing the RPM files"));
+	cp.addPositionalArgument("path", QCoreApplication::translate("main", "Directory containing the RPM files"), "[path...]");
 	cp.process(app);
 
 	if(cp.positionalArguments().isEmpty()) {
@@ -685,9 +688,14 @@ int main(int argc, char **argv) {
 	}
 
 	bool const update = cp.isSet("u");
+	String origin = cp.value("o");
+	if(!origin)
+		origin = "openmandriva";
+
+	std::cerr << "Origin: " << origin << std::endl;
 
 	for(QString const &path : cp.positionalArguments()) {
-		bool const ok = update ? updateMetadata(path) : createMetadata(path);
+		bool const ok = update ? updateMetadata(path) : createMetadata(path, origin);
 		if(!ok)
 			std::cerr << "Couldn't generate metadata for " << path << ", ignoring" << std::endl;
 	}
