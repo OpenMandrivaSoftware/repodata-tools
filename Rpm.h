@@ -72,6 +72,19 @@ public:
 	String dependenciesMd(enum DepType type) const;
 	String dependenciesMd() const;
 	String sha256();
+	String appstreamMd() const;
+	/**
+	 * Get the contents of files inside the rpm.
+	 *
+	 * This is a slightly strange API for performance reasons -- when
+	 * trying to get multiple files from a globally compressed archive,
+	 * it's much faster to grab all needed files in one go instead of
+	 * going for one file after another.
+	 *
+	 * @param filenames List of file names to extract
+	 * @return Hash mapping the filename to the file's contents
+	 */
+	QHash<String,QByteArray> extractFiles(QList<String> const &filenames) const;
 	/**
 	 * Wrapper around rpmlib headerGetString, mostly for internal use
 	 */

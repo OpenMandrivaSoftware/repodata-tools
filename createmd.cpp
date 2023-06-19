@@ -63,6 +63,13 @@ int main(int argc, char **argv) {
 			std::cerr << "Can't create other.xml in " << qPrintable(rd.absolutePath()) << ", ignoring" << std::endl;
 			continue;
 		}
+		QFile appstream(rd.filePath("appstream.xml"));
+		if(!appstream.open(QFile::WriteOnly|QFile::Truncate)) {
+			std::cerr << "Can't create appstream.xml in " << qPrintable(rd.absolutePath()) << ", ignoring" << std::endl;
+			continue;
+		}
+		appstream.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+				"<components origin=\"openmandriva\" version=\"0.14\">\n");
 
 		QTextStream primaryTs(&primary);
 		QTextStream filelistsTs(&filelists);
@@ -111,32 +118,39 @@ int main(int argc, char **argv) {
 			otherTs << "<package pkgid=\"" << r.sha256() << "\" name=\"" << r.name() << "\" arch=\"" << r.arch() << "\">" << Qt::endl
 				<< "	<version " << r.repoMdVersion() << "/>" << Qt::endl
 				<< "</package>" << Qt::endl;
+
+			appstream.write(r.appstreamMd());
 		}
 		primaryTs << "</metadata>" << Qt::endl;
 		filelistsTs << "</filelists>" << Qt::endl;
 		otherTs << "</otherdata>" << Qt::endl;
+		appstream.write("</components>\n");
 
 		primary.close();
 		filelists.close();
 		other.close();
+		appstream.close();
 
 		Compression::CompressFile(rd.filePath("primary.xml"));
 		Compression::CompressFile(rd.filePath("filelists.xml"));
 		Compression::CompressFile(rd.filePath("other.xml"));
+		Compression::CompressFile(rd.filePath("appstream.xml"), Compression::Format::GZip);
 
 		QHash<String,String> checksum{
 			{"primary", Sha256::checksum(rd.filePath("primary.xml"))},
 			{"filelists", Sha256::checksum(rd.filePath("filelists.xml"))},
 			{"other", Sha256::checksum(rd.filePath("other.xml"))},
+			{"appstream", Sha256::checksum(rd.filePath("appstream.xml"))},
 			{"primaryXZ", Sha256::checksum(rd.filePath("primary.xml.xz"))},
 			{"filelistsXZ", Sha256::checksum(rd.filePath("filelists.xml.xz"))},
 			{"otherXZ", Sha256::checksum(rd.filePath("other.xml.xz"))},
+			{"appstreamGZ", Sha256::checksum(rd.filePath("appstream.xml.gz"))}
 		};
 
 		QFile::rename(rd.filePath("primary.xml.xz"), rd.filePath(checksum["primaryXZ"] + "-primary.xml.xz"));
 		QFile::rename(rd.filePath("filelists.xml.xz"), rd.filePath(checksum["filelistsXZ"] + "-filelists.xml.xz"));
 		QFile::rename(rd.filePath("other.xml.xz"), rd.filePath(checksum["otherXZ"] + "-other.xml.xz"));
-
+		QFile::rename(rd.filePath("appstream.xml.gz"), rd.filePath(checksum["appstreamGZ"] + "-appstream.xml.gz"));
 
 		QFile repomd(rd.filePath("repomd.xml"));
 		repomd.open(QFile::WriteOnly|QFile::Truncate);
@@ -145,14 +159,16 @@ int main(int argc, char **argv) {
 		repomdTs << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" << Qt::endl
 			<< "<repomd xmlns=\"http://linux.duke.edu/metadata/repo\" xmlns:rpm=\"http://linux.duke.edu/metadata/rpm\">" << Qt::endl
 			<< "	<revision>" << timestamp << "</revision>" << Qt::endl;
-		for(String const &file : QList<String>{"primary", "filelists", "other"}) {
+		for(String const &file : QList<String>{"primary", "filelists", "other", "appstream"}) {
+			String compressedFile = (file == "appstream") ? file + "GZ" : file + "XZ";
+			String compressExtension = (file == "appstream") ? ".gz" : ".xz";
 			struct stat s, uncompressed;
-			stat(rd.filePath(checksum[file + "XZ"] + "-" + file + ".xml.xz").toUtf8(), &s);
+			stat(rd.filePath(checksum[compressedFile] + "-" + file + ".xml" + compressExtension).toUtf8(), &s);
 			stat(rd.filePath(file + ".xml").toUtf8(), &uncompressed);
 			repomdTs << "	<data type=\"" << file << "\">" << Qt::endl
-				<< "		<checksum type=\"sha256\">" << checksum[file + "XZ"] << "</checksum>" << Qt::endl
+				<< "		<checksum type=\"sha256\">" << checksum[compressedFile] << "</checksum>" << Qt::endl
 				<< "		<open-checksum type=\"sha256\">" << checksum[file] << "</open-checksum>" << Qt::endl
-				<< "		<location href=\"repodata/" << checksum[file + "XZ"] << "-" << file << ".xml.xz\"/>" << Qt::endl
+				<< "		<location href=\"repodata/" << checksum[compressedFile] << "-" << file << ".xml" + compressExtension + "\"/>" << Qt::endl
 				<< "		<timestamp>" << s.st_mtime << "</timestamp>" << Qt::endl
 				<< "		<size>" << s.st_size << "</size>" << Qt::endl
 				<< "		<open-size>" << uncompressed.st_size << "</open-size>" << Qt::endl

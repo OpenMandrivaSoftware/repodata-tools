@@ -14,10 +14,11 @@ extern "C" {
  */
 class FileName:public String {
 public:
+	FileName(String s):String(s) {}
 	FileName(char const *data, qsizetype size = -1):String(data, size) {}
 	FileName(QString const &s):String(s) {}
-	char const * const basename() const;
-	char const * const dirname() const;
+	String basename(String const &extension=String()) const;
+	String dirname() const;
 };
 
 class FileInfo {

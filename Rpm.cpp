@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // (C) 2023 Bernhard Rosenkränzer <bero@lindev.ch>
 #include "Rpm.h"
+#include "DesktopFile.h"
 #include <QFile>
 #include <QCryptographicHash>
+#include <QDomDocument>
+#include <QHash>
 #include <iostream>
 #include <cstring>
 
 extern "C" {
+#include <archive.h>
+#include <archive_entry.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 }
@@ -210,6 +215,248 @@ String Rpm::sha256() {
 		_sha256=hash.result().toHex();
 	}
 	return _sha256;
+}
+
+String Rpm::appstreamMd() const {
+	String ret;
+	QList<String> appstreamFiles;
+	QList<String> desktopFiles;
+	for(FileInfo const &fi : fileList(false)) {
+		if(fi.name().startsWith("/usr/share/metainfo/") || fi.name().startsWith("/usr/share/appdata/"))
+			appstreamFiles.append(fi.name());
+		else if(fi.name().startsWith("/usr/share/applications/"))
+			desktopFiles.append(fi.name());
+	}
+	QHash<String,QByteArray> appstreams = extractFiles(appstreamFiles + desktopFiles);
+	if(appstreamFiles.count()) {
+		for(auto it = appstreams.cbegin(), end = appstreams.cend(); it != end; ++it) {
+			// We don't need to try to build metadata from desktop
+			// files if we have appstream files (but we need to read
+			// them anyway to supplement the appstream files)
+			if(it.key().startsWith("/usr/share/applications/"))
+				continue;
+			// Here, we actually have to use a real XML parser instead of the simplistic
+			// assumptions we use elsewhere in the code: since we don't control the
+			// input files, they may not be indented reasonably and they may not even
+			// be valid.
+			QDomDocument dom;
+			dom.setContent(it.value());
+			QDomElement root = dom.documentElement();
+			if(root.tagName() != "component") {
+				std::cerr << "Appstream metadata with document element != component found: " << it.key() << " in " << _filename << std::endl;
+				continue;
+			}
+			// This is not strictly correct according to the standard, but a forgotten
+			// type="desktop" seems to be far more common than a legitimately untyped
+			// metainfo file.
+			if(!root.hasAttribute("type"))
+				root.setAttribute("type",  "desktop");
+
+			QDomElement id = root.firstChildElement("id");
+			if(id.isNull()) {
+				// No id -- so let's create one from the filename instead
+				id = dom.createElement("id");
+
+				String fakeId = FileName(it.key()).basename(".metainfo.xml");
+				// Since there is no consensus about *.metainfo.xml vs. *.appdata.xml,
+				// strip that off too
+				if(fakeId.endsWith(".appdata.xml"))
+					fakeId = fakeId.sliced(0, fakeId.length()-12);
+
+				id.appendChild(dom.createTextNode(fakeId));
+				if(root.firstChild().isNull())
+					root.appendChild(id);
+				else
+					root.insertBefore(id, root.firstChild());
+			}
+			if(root.firstChildElement("source_pkgname").isNull()) {
+				QDomElement pkgname = dom.createElement("source_pkgname");
+				String srpmName=sourceRpm();
+				// strip off -VERSION-RELEASE.src.rpm
+				if(srpmName.contains('-'))
+					srpmName=srpmName.sliced(0, srpmName.lastIndexOf('-'));
+				if(srpmName.contains('-'))
+					srpmName=srpmName.sliced(0, srpmName.lastIndexOf('-'));
+				pkgname.appendChild(dom.createTextNode(srpmName));
+				root.insertAfter(pkgname, id);
+			}
+			if(root.firstChildElement("pkgname").isNull()) {
+				QDomElement pkgname = dom.createElement("pkgname");
+				pkgname.appendChild(dom.createTextNode(name()));
+				root.insertAfter(pkgname, id);
+			}
+			// spec says update_contact must not be exposed to the end user
+			while(!root.firstChildElement("update_contact").isNull())
+				root.removeChild(root.firstChildElement("update_contact"));
+
+			// If we have a matching desktop file, we can supplement the
+			// metainfo with it metainfo files frequently "forget" the
+			// icon as well as categories.
+			String desktopFile;
+
+			QDomElement launchable = root.firstChildElement("launchable");
+			while(!launchable.isNull()) {
+				if(launchable.attribute("type") == "desktop-id") {
+					String d = "/usr/share/applications/" + launchable.text();
+					if(desktopFiles.contains(d)) {
+						desktopFile = d;
+						break;
+					} else if(desktopFiles.contains(d + ".desktop")) {
+						// Just to make sure. There's no known cases
+						// of this, but it seems easy to "forget" to
+						// append .desktop to the ID...
+						desktopFile = d + ".desktop";
+						break;
+					}
+
+				}
+				launchable = launchable.nextSiblingElement("launchable");
+			}
+
+			// The desktop file *should* be referenced with a
+			// <launchable type="desktop-id"> tag, but frequently isn't,
+			// so we'll also look for a desktop file matching the ID.
+			if(!desktopFile) {
+				String d = "/usr/share/applications/" + id.text() + ".desktop";
+				if(desktopFiles.contains(d))
+					desktopFile = d;
+				if(!desktopFile) {
+					// A few bogus appdata files (e.g. konsole and falkon)
+					// already list ".desktop" as part of their id
+					// (a desktop to appdata converter gone wrong?)
+					d = "/usr/share/applications/" + id.text();
+					if(desktopFiles.contains(d))
+						desktopFile = d;
+					// Lastly, let's try just the name
+					if(!desktopFile) {
+						d = "/usr/share/applications/" + name() + ".desktop";
+						if(desktopFiles.contains(d))
+							desktopFile = d;
+					}
+				}
+			}
+
+			if(desktopFile) {
+				// We found a matching desktop file -- so let's make
+				// sure it's listed as launchable too...
+				launchable = root.firstChildElement("launchable");
+				if(launchable.isNull()) {
+					launchable = dom.createElement("launchable");
+					launchable.setAttribute("type", "desktop-id");
+					launchable.appendChild(dom.createTextNode(FileName(desktopFile).basename()));
+					root.appendChild(launchable);
+				}
+
+				DesktopFile df(appstreams[desktopFile]);
+				QDomElement icon = root.firstChildElement("icon");
+				if(icon.isNull() && df.hasKey("Icon")) {
+					icon = dom.createElement("icon");
+					icon.setAttribute("type", "stock");
+					icon.appendChild(dom.createTextNode(df.value("Icon")));
+					root.appendChild(icon);
+
+					// FIXME do we also want to add an icon type="cached" here?
+				}
+
+				QDomElement categories = root.firstChildElement("categories");
+				if(categories.isNull() && df.hasKey("Categories")) {
+					categories = dom.createElement("categories");
+					for(QByteArray const &s : df.value("Categories").split(';')) {
+						if(s.isEmpty())
+							continue;
+						QDomElement category = dom.createElement("category");
+						category.appendChild(dom.createTextNode(s));
+						categories.appendChild(category);
+					}
+					root.appendChild(categories);
+				}
+			}
+
+			String md(dom.toByteArray());
+			// Strip XML header, repeating <?xml version ..... is harmful
+			while(!md.startsWith("<component") && md.contains('\n'))
+				md=md.sliced(md.indexOf('\n')+1);
+			ret += md.trimmed() + "\n";
+		}
+	} else if(desktopFiles.count()) {
+		// No appstream files, but we can get much of the same content from desktop files...
+		QHash<String,QByteArray> desktops = extractFiles(desktopFiles);
+		for(auto i=desktops.cbegin(), end=desktops.cend(); i!=end; ++i) {
+			String md;
+			String desktopName = FileName(i.key()).basename(".desktop");
+			String id = desktopName;
+			// IDs can't contain special characters, but we must
+			// leave desktopName unmodified...
+			id.replace(' ', '_').replace('-','_');
+			md += "<component type=\"desktop\">\n"
+				" <id>" + id + "</id>\n"
+				" <pkgname>" + name() + "</pkgname>\n";
+
+			String srpmName=sourceRpm();
+			// strip off -VERSION-RELEASE.src.rpm
+			if(srpmName.contains('-'))
+				srpmName=srpmName.sliced(0, srpmName.lastIndexOf('-'));
+			if(srpmName.contains('-'))
+				srpmName=srpmName.sliced(0, srpmName.lastIndexOf('-'));
+
+			md += " <source_pkgname>" + srpmName + "</source_pkgname>\n"
+				" <launchable type=\"desktop-id\">" + desktopName + ".desktop</launchable>\n"
+				" <description><p>" + description() + "</p></description>\n";
+			DesktopFile df(i.value());
+			QHash<String, String> entries = df["Desktop Entry"];
+			for(auto dfe=df["Desktop Entry"].cbegin(), dfend=df["Destkop Entry"].cend(); dfe != dfend; ++dfe) {
+				if(dfe.key() == "Icon") {
+					// FIXME do we also want to generate an icon type="cached" here?
+					md += " <icon type=\"stock\">" + dfe.value() + "</icon>\n";
+				} else if(dfe.key() == "Name") {
+					md += " <name>" + dfe.value() + "</name>\n";
+				} else if(dfe.key() == "GenericName") {
+					md += " <summary>" + dfe.value() + "</summary>\n";
+				} else if(dfe.key() == "Categories") {
+					md += " <categories>\n";
+					for(QByteArray c : dfe.value().split(';')) {
+						if(c.length())
+							md += "  <category>" + c + "</category>\n";
+					}
+					md += " </categories>\n";
+				}
+			}
+			md += "</component>\n";
+			ret += md;
+		}
+	}
+	return ret;
+}
+
+QHash<String,QByteArray> Rpm::extractFiles(QList<String> const &filenames) const {
+	QHash<String,QByteArray> ret;
+	archive *a = archive_read_new();
+	archive_read_support_filter_all(a);
+	archive_read_support_format_all(a);
+	int r = archive_read_open_filename(a, _filename, 16384);
+	if(r != ARCHIVE_OK) {
+		return ret;
+	}
+	ret.reserve(filenames.count());
+	archive_entry *e;
+	while(archive_read_next_header(a, &e) == ARCHIVE_OK) {
+		char const * fn = archive_entry_pathname(e);
+		if(*fn == '.') // rpm seems to store filenames with a leading dot
+			fn++;
+		if(filenames.contains(fn)) {
+			size_t size=archive_entry_size(e);
+			char buf[size];
+			int r = archive_read_data(a, &buf, size);
+			ret.insert(fn, QByteArray(buf, size));
+			if(ret.count() == filenames.count()) {
+				// No need to keep reading the archive...
+				break;
+			}
+		} else
+			archive_read_data_skip(a);
+	}
+	archive_read_free(a);
+	return ret;
 }
 
 Files Rpm::fileList(bool onlyPrimary) const {
