@@ -25,4 +25,5 @@ public:
 
 public:
 	static bool CompressFile(String const &source, Format c=Format::Xz, String target=String());
+	static QByteArray uncompressedFile(String const &source);
 };

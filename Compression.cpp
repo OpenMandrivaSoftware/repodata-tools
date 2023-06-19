@@ -69,3 +69,27 @@ bool Compression::CompressFile(String const &source, Format c, String target) {
 	archive_write_free(a);
 	return true;
 }
+
+QByteArray Compression::uncompressedFile(String const &source) {
+	archive *a = archive_read_new();
+	archive_read_support_format_raw(a);
+	archive_read_support_filter_all(a);
+	//archive_read_support_compression_all(a);
+	if(archive_read_open_filename(a, source, 16384) != ARCHIVE_OK) {
+		return QByteArray();
+	}
+	archive_entry *e;
+	if(archive_read_next_header(a, &e) != ARCHIVE_OK) {
+		archive_read_free(a);
+		return QByteArray();
+	}
+	// archive_entry_size doesn't seem to work on raw files, so
+	// let's do it manually
+	QByteArray ret;
+	char buf[8192];
+	while(int size = archive_read_data(a, buf, sizeof(buf))) {
+		ret.append(QByteArray(buf, size));
+	}
+	archive_read_free(a);
+	return ret;
+}

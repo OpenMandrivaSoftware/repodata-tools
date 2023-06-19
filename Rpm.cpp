@@ -597,7 +597,6 @@ Files Rpm::fileList(bool onlyPrimary) const {
 String Rpm::fileListMd(bool onlyPrimary) const {
 	String ret;
 	String indent = onlyPrimary ? "		" : "	";
-	// FIXME Need to handle <file type="dir", <file type="ghost", ...
 	for(FileInfo const &f : fileList(onlyPrimary)) {
 		ret += indent + "<file";
 		if(f.attributes() & RPMFILE_GHOST)

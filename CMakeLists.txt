@@ -24,3 +24,5 @@ target_link_libraries(rpmpp rpmio rpm Qt6::Core Qt6::Xml ${LIBARCHIVE_LIBRARIES}
 
 add_executable(createmd createmd.cpp Sha256.cpp)
 target_link_libraries(createmd rpmpp)
+
+install(TARGETS createmd DESTINATION bin)
