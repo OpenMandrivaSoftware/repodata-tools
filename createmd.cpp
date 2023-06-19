@@ -3,6 +3,7 @@
 #include "Rpm.h"
 #include "Sha256.h"
 #include "Compression.h"
+#include "Archive.h"
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QFile>
@@ -70,6 +71,7 @@ int main(int argc, char **argv) {
 		}
 		appstream.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 				"<components origin=\"openmandriva\" version=\"0.14\">\n");
+		Archive appstreamIcons(rd.filePath("appstream-icons.tar"));
 
 		QTextStream primaryTs(&primary);
 		QTextStream filelistsTs(&filelists);
@@ -119,7 +121,11 @@ int main(int argc, char **argv) {
 				<< "	<version " << r.repoMdVersion() << "/>" << Qt::endl
 				<< "</package>" << Qt::endl;
 
-			appstream.write(r.appstreamMd());
+			QHash<String,QByteArray> icons;
+			appstream.write(r.appstreamMd(&icons));
+			for(auto icon=icons.cbegin(), iend=icons.cend(); icon != iend; ++icon) {
+				appstreamIcons.addFile(icon.key(), icon.value());
+			}
 		}
 		primaryTs << "</metadata>" << Qt::endl;
 		filelistsTs << "</filelists>" << Qt::endl;
@@ -130,27 +136,32 @@ int main(int argc, char **argv) {
 		filelists.close();
 		other.close();
 		appstream.close();
+		appstreamIcons.close();
 
 		Compression::CompressFile(rd.filePath("primary.xml"));
 		Compression::CompressFile(rd.filePath("filelists.xml"));
 		Compression::CompressFile(rd.filePath("other.xml"));
 		Compression::CompressFile(rd.filePath("appstream.xml"), Compression::Format::GZip);
+		Compression::CompressFile(rd.filePath("appstream-icons.tar"), Compression::Format::GZip);
 
 		QHash<String,String> checksum{
 			{"primary", Sha256::checksum(rd.filePath("primary.xml"))},
 			{"filelists", Sha256::checksum(rd.filePath("filelists.xml"))},
 			{"other", Sha256::checksum(rd.filePath("other.xml"))},
 			{"appstream", Sha256::checksum(rd.filePath("appstream.xml"))},
+			{"appstream-icons", Sha256::checksum(rd.filePath("appstream-icons.tar"))},
 			{"primaryXZ", Sha256::checksum(rd.filePath("primary.xml.xz"))},
 			{"filelistsXZ", Sha256::checksum(rd.filePath("filelists.xml.xz"))},
 			{"otherXZ", Sha256::checksum(rd.filePath("other.xml.xz"))},
-			{"appstreamGZ", Sha256::checksum(rd.filePath("appstream.xml.gz"))}
+			{"appstreamGZ", Sha256::checksum(rd.filePath("appstream.xml.gz"))},
+			{"appstream-iconsGZ", Sha256::checksum(rd.filePath("appstream-icons.tar.gz"))}
 		};
 
 		QFile::rename(rd.filePath("primary.xml.xz"), rd.filePath(checksum["primaryXZ"] + "-primary.xml.xz"));
 		QFile::rename(rd.filePath("filelists.xml.xz"), rd.filePath(checksum["filelistsXZ"] + "-filelists.xml.xz"));
 		QFile::rename(rd.filePath("other.xml.xz"), rd.filePath(checksum["otherXZ"] + "-other.xml.xz"));
 		QFile::rename(rd.filePath("appstream.xml.gz"), rd.filePath(checksum["appstreamGZ"] + "-appstream.xml.gz"));
+		QFile::rename(rd.filePath("appstream-icons.tar.gz"), rd.filePath(checksum["appstream-iconsGZ"] + "-appstream-icons.tar.gz"));
 
 		QFile repomd(rd.filePath("repomd.xml"));
 		repomd.open(QFile::WriteOnly|QFile::Truncate);
@@ -159,16 +170,16 @@ int main(int argc, char **argv) {
 		repomdTs << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" << Qt::endl
 			<< "<repomd xmlns=\"http://linux.duke.edu/metadata/repo\" xmlns:rpm=\"http://linux.duke.edu/metadata/rpm\">" << Qt::endl
 			<< "	<revision>" << timestamp << "</revision>" << Qt::endl;
-		for(String const &file : QList<String>{"primary", "filelists", "other", "appstream"}) {
-			String compressedFile = (file == "appstream") ? file + "GZ" : file + "XZ";
-			String compressExtension = (file == "appstream") ? ".gz" : ".xz";
+		for(String const &file : QList<String>{"primary", "filelists", "other", "appstream", "appstream-icons"}) {
+			String compressedFile = (file.startsWith("appstream")) ? file + "GZ" : file + "XZ";
+			String compressExtension = (file.startsWith("appstream")) ? ".gz" : ".xz";
 			struct stat s, uncompressed;
 			stat(rd.filePath(checksum[compressedFile] + "-" + file + ".xml" + compressExtension).toUtf8(), &s);
 			stat(rd.filePath(file + ".xml").toUtf8(), &uncompressed);
 			repomdTs << "	<data type=\"" << file << "\">" << Qt::endl
 				<< "		<checksum type=\"sha256\">" << checksum[compressedFile] << "</checksum>" << Qt::endl
 				<< "		<open-checksum type=\"sha256\">" << checksum[file] << "</open-checksum>" << Qt::endl
-				<< "		<location href=\"repodata/" << checksum[compressedFile] << "-" << file << ".xml" + compressExtension + "\"/>" << Qt::endl
+				<< "		<location href=\"repodata/" << checksum[compressedFile] << "-" << file << ((file == "appstream-icons") ? ".tar" : ".xml") + compressExtension + "\"/>" << Qt::endl
 				<< "		<timestamp>" << s.st_mtime << "</timestamp>" << Qt::endl
 				<< "		<size>" << s.st_size << "</size>" << Qt::endl
 				<< "		<open-size>" << uncompressed.st_size << "</open-size>" << Qt::endl

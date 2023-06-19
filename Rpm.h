@@ -72,7 +72,7 @@ public:
 	String dependenciesMd(enum DepType type) const;
 	String dependenciesMd() const;
 	String sha256();
-	String appstreamMd() const;
+	String appstreamMd(QHash<String,QByteArray> *icons=nullptr) const;
 	/**
 	 * Get the contents of files inside the rpm.
 	 *

@@ -2,6 +2,7 @@
 // (C) 2023 Bernhard Rosenkränzer <bero@lindev.ch>
 #include "Rpm.h"
 #include "DesktopFile.h"
+#include "Archive.h"
 #include <QFile>
 #include <QCryptographicHash>
 #include <QDomDocument>
@@ -217,15 +218,20 @@ String Rpm::sha256() {
 	return _sha256;
 }
 
-String Rpm::appstreamMd() const {
+String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
+	if(icons)
+		icons->clear();
 	String ret;
 	QList<String> appstreamFiles;
 	QList<String> desktopFiles;
+	QList<String> iconFiles;
 	for(FileInfo const &fi : fileList(false)) {
 		if(fi.name().startsWith("/usr/share/metainfo/") || fi.name().startsWith("/usr/share/appdata/"))
 			appstreamFiles.append(fi.name());
 		else if(fi.name().startsWith("/usr/share/applications/"))
 			desktopFiles.append(fi.name());
+		else if(fi.name().startsWith("/usr/share/icons/") || fi.name().startsWith("/usr/share/pixmaps"))
+			iconFiles.append(fi.name());
 	}
 	QHash<String,QByteArray> appstreams = extractFiles(appstreamFiles + desktopFiles);
 	if(appstreamFiles.count()) {
@@ -361,12 +367,49 @@ String Rpm::appstreamMd() const {
 				DesktopFile df(appstreams[desktopFile]);
 				QDomElement icon = root.firstChildElement("icon");
 				if(icon.isNull() && df.hasKey("Icon")) {
+					String iconName = df.value("Icon");
 					icon = dom.createElement("icon");
 					icon.setAttribute("type", "stock");
-					icon.appendChild(dom.createTextNode(df.value("Icon")));
+					icon.appendChild(dom.createTextNode(iconName));
 					root.appendChild(icon);
 
-					// FIXME do we also want to add an icon type="cached" here?
+					if(icons) {
+						QList<String> relevantIcons;
+						for(String const &i : iconFiles) {
+							if(i.startsWith("/usr/share/icons/") && (i.endsWith("/64x64/apps/" + iconName  + ".png") || i.endsWith("/128x128/apps/" + iconName + ".png")))
+								relevantIcons.append(i);
+						}
+						if(!relevantIcons.count()) {
+							// the spec says png icons are preferred, but vector is
+							// allowed, so if we can't find the PNGs, fall back
+							// to SVGs
+							for(String const &i : iconFiles) {
+								if(i.startsWith("/usr/share/icons/") && (i.endsWith("/scalable/apps/" + iconName  + ".svg") || i.endsWith("/scalable/apps/" + iconName + ".svgz")))
+									relevantIcons.append(i);
+							}
+						}
+						if(relevantIcons.count()) {
+							QHash<String,QByteArray> iconData = extractFiles(relevantIcons);
+							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
+								QList<QByteArray> n=i.key().split('/');
+								String size=n.at(n.length()-3);
+								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').at(1);
+								icons->insert(name, i.value());
+								String simpleSize=size.split('x').at(0);
+								icon = dom.createElement("icon");
+								icon.setAttribute("type", "cached");
+								if(size == "scalable") {
+									icon.setAttribute("width", 64);
+									icon.setAttribute("height", 64);
+								} else {
+									icon.setAttribute("width", QString(simpleSize));
+									icon.setAttribute("height", QString(simpleSize));
+								}
+								icon.appendChild(dom.createTextNode(name));
+								root.appendChild(icon);
+							}
+						}
+					}
 				}
 
 				QDomElement categories = root.firstChildElement("categories");
@@ -417,8 +460,39 @@ String Rpm::appstreamMd() const {
 			QHash<String, String> entries = df["Desktop Entry"];
 			for(auto dfe=df["Desktop Entry"].cbegin(), dfend=df["Destkop Entry"].cend(); dfe != dfend; ++dfe) {
 				if(dfe.key() == "Icon") {
-					// FIXME do we also want to generate an icon type="cached" here?
-					md += " <icon type=\"stock\">" + dfe.value() + "</icon>\n";
+					String iconName = dfe.value();
+					md += " <icon type=\"stock\">" + iconName + "</icon>\n";
+					if(icons) {
+						QList<String> relevantIcons;
+						for(String const &i : iconFiles) {
+							if(i.startsWith("/usr/share/icons/") && (i.endsWith("/64x64/apps/" + iconName  + ".png") || i.endsWith("/128x128/apps/" + iconName + ".png")))
+								relevantIcons.append(i);
+						}
+						if(!relevantIcons.count()) {
+							// the spec says png icons are preferred, but vector is
+							// allowed, so if we can't find the PNGs, fall back
+							// to SVGs
+							for(String const &i : iconFiles) {
+								if(i.startsWith("/usr/share/icons/") && (i.endsWith("/scalable/apps/" + iconName  + ".svg") || i.endsWith("/scalable/apps/" + iconName + ".svgz")))
+									relevantIcons.append(i);
+							}
+						}
+						if(relevantIcons.count()) {
+							QHash<String,QByteArray> iconData = extractFiles(relevantIcons);
+							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
+								QList<QByteArray> n=i.key().split('/');
+								String size=n.at(n.length()-3);
+								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').at(1);
+								icons->insert(name, i.value());
+								if(size == "scalable") {
+									md += " <icon type=\"cached\" width=\"64\" height=\"64\">" + name + "</icon>\n";
+								} else {
+									String simpleSize=size.split('x').at(0);
+									md += " <icon type=\"cached\" width=\"" + simpleSize + "\" height=\"" + simpleSize + "\">" + name + "</icon>\n";
+								}
+							}
+						}
+					}
 				} else if(dfe.key() == "Name") {
 					md += " <name>" + dfe.value() + "</name>\n";
 				} else if(dfe.key() == "GenericName") {
