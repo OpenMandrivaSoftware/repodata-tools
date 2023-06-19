@@ -305,6 +305,10 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 			// spec says update_contact must not be exposed to the end user
 			while(!root.firstChildElement("update_contact").isNull())
 				root.removeChild(root.firstChildElement("update_contact"));
+			// updatecontent is wrong, but relatively common especially in
+			// GNOME stuff. Let's remote it too.
+			while(!root.firstChildElement("updatecontact").isNull())
+				root.removeChild(root.firstChildElement("updatecontact"));
 
 			// If we have a matching desktop file, we can supplement the
 			// metainfo with it metainfo files frequently "forget" the
