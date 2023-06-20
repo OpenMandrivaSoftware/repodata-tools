@@ -246,7 +246,11 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 			// input files, they may not be indented reasonably and they may not even
 			// be valid.
 			QDomDocument dom;
-			dom.setContent(it.value());
+			// We use trimmed() here because Qt's XML parser is strict about
+			// things like <?xml ... having to be at the beginning of the file,
+			// without a linebreak or anything in front of it.
+			// A few metadata files (e.g. flightgear) have a leading newline.
+			dom.setContent(it.value().trimmed());
 			QDomElement root = dom.documentElement();
 			if(root.tagName() == "application") {
 				// Seems to be an old version of the standard, spotted in

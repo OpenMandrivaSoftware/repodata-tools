@@ -692,8 +692,6 @@ int main(int argc, char **argv) {
 	if(!origin)
 		origin = "openmandriva";
 
-	std::cerr << "Origin: " << origin << std::endl;
-
 	for(QString const &path : cp.positionalArguments()) {
 		bool const ok = update ? updateMetadata(path) : createMetadata(path, origin);
 		if(!ok)
