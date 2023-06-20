@@ -603,10 +603,10 @@ String Rpm::fileListMd(bool onlyPrimary) const {
 	String indent = onlyPrimary ? "		" : "	";
 	for(FileInfo const &f : fileList(onlyPrimary)) {
 		ret += indent + "<file";
-		if(f.attributes() & RPMFILE_GHOST)
-			ret += " type=\"ghost\"";
 		if(S_ISDIR(f.mode()))
 			ret += " type=\"dir\"";
+		else if(f.attributes() & RPMFILE_GHOST)
+			ret += " type=\"ghost\"";
 		ret += ">" + f.name().xmlEncode() + "</file>\n";
 	}
 	return ret;
