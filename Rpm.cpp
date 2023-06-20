@@ -169,7 +169,7 @@ QList<Dependency> Rpm::dependencies(enum DepType type) const {
 }
 
 String Dependency::repoMd() const {
-	String ret = "<rpm:entry name=\"" + name() + "\"";
+	String ret = "<rpm:entry name=\"" + name().xmlEncode() + "\"";
 	String s = repoMdFlags();
 	if(s)
 		ret += " flags=\"" + s + "\"";
