@@ -463,7 +463,7 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 
 			md += " <source_pkgname>" + srpmName + "</source_pkgname>\n"
 				" <launchable type=\"desktop-id\">" + desktopName + ".desktop</launchable>\n"
-				" <description><p>" + description() + "</p></description>\n";
+				" <description><p>" + description().xmlEncode() + "</p></description>\n";
 			DesktopFile df(i.value());
 			QHash<String, String> entries = df["Desktop Entry"];
 			for(auto dfe=df["Desktop Entry"].cbegin(), dfend=df["Destkop Entry"].cend(); dfe != dfend; ++dfe) {
@@ -502,9 +502,9 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 						}
 					}
 				} else if(dfe.key() == "Name") {
-					md += " <name>" + dfe.value() + "</name>\n";
+					md += " <name>" + dfe.value().xmlEncode() + "</name>\n";
 				} else if(dfe.key() == "GenericName") {
-					md += " <summary>" + dfe.value() + "</summary>\n";
+					md += " <summary>" + dfe.value().xmlEncode() + "</summary>\n";
 				} else if(dfe.key() == "Categories") {
 					md += " <categories>\n";
 					for(QByteArray c : dfe.value().split(';')) {
