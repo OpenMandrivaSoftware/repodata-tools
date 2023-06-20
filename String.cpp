@@ -6,7 +6,8 @@ String String::xmlEncode() const {
 	return String(*this)
 		.replace('&', "&amp;")
 		.replace("<", "&lt;")
-		.replace(">", "&gt;");
+		.replace(">", "&gt;")
+		.replace("\"", "&quot;");
 }
 
 std::ostream &operator <<(std::ostream &os, String const &s) {
