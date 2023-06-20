@@ -413,25 +413,25 @@ static bool updateMetadata(String const &path) {
 		metadata.appendChild(package);
 
 		// Add to filelists.xml
-		QDomDocument &filelists = oldMetadata["filelists"];
-		package = filelists.createElement("package");
+		QDomDocument &filelistsdoc = oldMetadata["filelists"];
+		package = filelistsdoc.createElement("package");
 		package.setAttribute("pkgid", static_cast<QString>(checksum));
 		package.setAttribute("name", static_cast<QString>(r.name()));
 		package.setAttribute("arch", static_cast<QString>(r.arch()));
 
-		e = filelists.createElement("version");
+		e = filelistsdoc.createElement("version");
 		e.setAttribute("epoch", r.epoch());
 		e.setAttribute("ver", static_cast<QString>(r.version()));
 		e.setAttribute("release", static_cast<QString>(r.release()));
 		package.appendChild(e);
 
 		for(FileInfo const &f : r.fileList(false)) {
-			e = filelists.createElement("file");
+			e = filelistsdoc.createElement("file");
 			if(f.attributes() & RPMFILE_GHOST)
 				e.setAttribute("type", "ghost");
 			else if(S_ISDIR(f.mode()))
 				e.setAttribute("type", "dir");
-			e.appendChild(filelists.createTextNode(f.name()));
+			e.appendChild(filelistsdoc.createTextNode(f.name()));
 			package.appendChild(e);
 		}
 		filelists.appendChild(package);
@@ -449,7 +449,7 @@ static bool updateMetadata(String const &path) {
 		e.setAttribute("release", static_cast<QString>(r.release()));
 		package.appendChild(e);
 
-		other.appendChild(package);
+		otherdata.appendChild(package);
 
 		// Add to appstream.xml
 		QDomDocument &appstream = oldMetadata["appstream"];
