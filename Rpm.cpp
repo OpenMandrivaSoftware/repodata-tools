@@ -607,7 +607,7 @@ String Rpm::fileListMd(bool onlyPrimary) const {
 			ret += " type=\"ghost\"";
 		if(S_ISDIR(f.mode()))
 			ret += " type=\"dir\"";
-		ret += ">" + f.name() + "</file>\n";
+		ret += ">" + f.name().xmlEncode() + "</file>\n";
 	}
 	return ret;
 }
