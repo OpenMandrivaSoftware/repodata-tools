@@ -47,7 +47,7 @@ public:
 	Files fileList(bool onlyPrimary=false) const;
 	String fileListMd(bool onlyPrimary=false) const;
 	String name() const { return headerString(RPMTAG_NAME); }
-	String arch() const { return headerString(RPMTAG_ARCH); }
+	String arch() const { return _filename.endsWith(".src.rpm") ? "src" : headerString(RPMTAG_ARCH); } // Workaround for rpm putting the build arch into src.rpm headers
 	int epoch() const { return headerNumber(RPMTAG_EPOCH); }
 	String version() const { return headerString(RPMTAG_VERSION); }
 	String repoMdVersion() const;
