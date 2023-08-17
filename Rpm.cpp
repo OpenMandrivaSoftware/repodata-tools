@@ -7,6 +7,8 @@
 #include <QCryptographicHash>
 #include <QDomDocument>
 #include <QHash>
+#include <QImage>
+#include <QBuffer>
 #include <iostream>
 #include <cstring>
 
@@ -402,18 +404,28 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
 								QList<QByteArray> n=i.key().split('/');
 								String size=n.at(n.length()-3);
-								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').last();
-								icons->insert(name, i.value());
+								String name;
+#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
+								if(size == "scalable") {
+									size = "64x64";
+									name = size + "/" + iconName + ".png";
+									QImage original;
+									original.loadFromData(i.value());
+									QBuffer converted;
+									original.save(&converted,  "PNG");
+									icons->insert(name, converted.data());
+								} else {
+#endif
+									name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').last();
+									icons->insert(name, i.value());
+#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
+								}
+#endif
 								String simpleSize=size.split('x').at(0);
 								icon = dom.createElement("icon");
 								icon.setAttribute("type", "cached");
-								if(size == "scalable") {
-									icon.setAttribute("width", 64);
-									icon.setAttribute("height", 64);
-								} else {
-									icon.setAttribute("width", QString(simpleSize));
-									icon.setAttribute("height", QString(simpleSize));
-								}
+								icon.setAttribute("width", QString(simpleSize));
+								icon.setAttribute("height", QString(simpleSize));
 								icon.appendChild(dom.createTextNode(name.split('/').last()));
 								root.appendChild(icon);
 							}
@@ -493,8 +505,23 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
 								QList<QByteArray> n=i.key().split('/');
 								String size=n.at(n.length()-3);
-								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').at(1);
-								icons->insert(name, i.value());
+								String name;
+#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
+								if(size == "scalable") {
+									size = "64x64";
+									name = size + "/" + iconName + ".png";
+									QImage original;
+									original.loadFromData(i.value());
+									QBuffer converted;
+									original.save(&converted,  "PNG");
+									icons->insert(name, converted.data());
+								} else {
+#endif
+									name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').last();
+									icons->insert(name, i.value());
+#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
+								}
+#endif
 								if(size == "scalable") {
 									md += " <icon type=\"cached\" width=\"64\" height=\"64\">" + name.split('/').last() + "</icon>\n";
 								} else {

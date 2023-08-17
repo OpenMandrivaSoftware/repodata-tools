@@ -4,7 +4,7 @@
 #include "Sha256.h"
 #include "Compression.h"
 #include "Archive.h"
-#include <QCoreApplication>
+#include <QGuiApplication>
 #include <QCommandLineParser>
 #include <QFile>
 #include <QDir>
@@ -667,19 +667,20 @@ static bool createMetadata(String const &path, String const &origin="openmandriv
 }
 
 int main(int argc, char **argv) {
-	QCoreApplication app(argc, argv);
-	QCoreApplication::setApplicationName("createmd");
-	QCoreApplication::setApplicationVersion("0.0.1");
+	setenv("QT_QPA_PLATFORM", "offscreen", 1);
+	QGuiApplication app(argc, argv);
+	QGuiApplication::setApplicationName("createmd");
+	QGuiApplication::setApplicationVersion("0.0.1");
 
 	QCommandLineParser cp;
 	cp.setApplicationDescription("RPM repository metadata creator");
 	cp.addOptions({
-		{{"u", "update"}, QCoreApplication::translate("main", "Update metadata instead of generating it")},
-		{{"o", "origin"}, QCoreApplication::translate("main", "Origin identifier to be used (only while generating from scratch)"), "origin"},
+		{{"u", "update"}, QGuiApplication::translate("main", "Update metadata instead of generating it")},
+		{{"o", "origin"}, QGuiApplication::translate("main", "Origin identifier to be used (only while generating from scratch)"), "origin"},
 	});
 	cp.addHelpOption();
 	cp.addVersionOption();
-	cp.addPositionalArgument("path", QCoreApplication::translate("main", "Directory containing the RPM files"), "[path...]");
+	cp.addPositionalArgument("path", QGuiApplication::translate("main", "Directory containing the RPM files"), "[path...]");
 	cp.process(app);
 
 	if(cp.positionalArguments().isEmpty()) {
