@@ -376,11 +376,12 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 				QDomElement icon = root.firstChildElement("icon");
 				if(icon.isNull() && df.hasKey("Icon")) {
 					String iconName = df.value("Icon");
+#ifdef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
 					icon = dom.createElement("icon");
 					icon.setAttribute("type", "stock");
 					icon.appendChild(dom.createTextNode(iconName));
 					root.appendChild(icon);
-
+#endif
 					if(icons) {
 						QList<String> relevantIcons;
 						for(String const &i : iconFiles) {
@@ -401,7 +402,7 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
 								QList<QByteArray> n=i.key().split('/');
 								String size=n.at(n.length()-3);
-								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').at(1);
+								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').last();
 								icons->insert(name, i.value());
 								String simpleSize=size.split('x').at(0);
 								icon = dom.createElement("icon");
@@ -413,7 +414,7 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 									icon.setAttribute("width", QString(simpleSize));
 									icon.setAttribute("height", QString(simpleSize));
 								}
-								icon.appendChild(dom.createTextNode(name));
+								icon.appendChild(dom.createTextNode(name.split('/').last()));
 								root.appendChild(icon);
 							}
 						}
@@ -469,7 +470,9 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 			for(auto dfe=df["Desktop Entry"].cbegin(), dfend=df["Destkop Entry"].cend(); dfe != dfend; ++dfe) {
 				if(dfe.key() == "Icon") {
 					String iconName = dfe.value();
+#ifdef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
 					md += " <icon type=\"stock\">" + iconName + "</icon>\n";
+#endif
 					if(icons) {
 						QList<String> relevantIcons;
 						for(String const &i : iconFiles) {
@@ -493,10 +496,10 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 								String name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').at(1);
 								icons->insert(name, i.value());
 								if(size == "scalable") {
-									md += " <icon type=\"cached\" width=\"64\" height=\"64\">" + name + "</icon>\n";
+									md += " <icon type=\"cached\" width=\"64\" height=\"64\">" + name.split('/').last() + "</icon>\n";
 								} else {
 									String simpleSize=size.split('x').at(0);
-									md += " <icon type=\"cached\" width=\"" + simpleSize + "\" height=\"" + simpleSize + "\">" + name + "</icon>\n";
+									md += " <icon type=\"cached\" width=\"" + simpleSize + "\" height=\"" + simpleSize + "\">" + name.split('/').last() + "</icon>\n";
 								}
 							}
 						}
