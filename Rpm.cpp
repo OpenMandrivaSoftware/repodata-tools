@@ -308,6 +308,11 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 				pkgname.appendChild(dom.createTextNode(name()));
 				root.insertAfter(pkgname, id);
 			}
+			if(root.firstChildElement("name").isNull()) {
+				QDomElement appname = dom.createElement("name");
+				appname.appendChild(dom.createTextNode(name()));
+				root.insertAfter(appname, id);
+			}
 			// spec says update_contact must not be exposed to the end user
 			while(!root.firstChildElement("update_contact").isNull())
 				root.removeChild(root.firstChildElement("update_contact"));
