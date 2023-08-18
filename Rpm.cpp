@@ -308,11 +308,6 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 				pkgname.appendChild(dom.createTextNode(name()));
 				root.insertAfter(pkgname, id);
 			}
-			if(root.firstChildElement("name").isNull()) {
-				QDomElement appname = dom.createElement("name");
-				appname.appendChild(dom.createTextNode(name()));
-				root.insertAfter(appname, id);
-			}
 			// spec says update_contact must not be exposed to the end user
 			while(!root.firstChildElement("update_contact").isNull())
 				root.removeChild(root.firstChildElement("update_contact"));
@@ -367,6 +362,14 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 					}
 				}
 			}
+
+			// If we still haven't found a desktop file, but there's
+			// only one in the package, there's a good chance it's what
+			// we want...
+			if(!desktopFile && desktopFiles.count() == 1)
+				desktopFile = desktopFiles.at(0);
+
+			String fancyName = name();
 
 			if(desktopFile) {
 				// We found a matching desktop file -- so let's make
@@ -437,6 +440,8 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 						}
 					}
 				}
+				if (df.hasKey("Name"))
+					fancyName = df.value("Name");
 
 				QDomElement categories = root.firstChildElement("categories");
 				if(categories.isNull() && df.hasKey("Categories")) {
@@ -450,6 +455,20 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 					}
 					root.appendChild(categories);
 				}
+			} else
+				fancyName = name();
+
+			// Some badly done appdata files miss name and summary
+			if(root.firstChildElement("name").isNull()) {
+				QDomElement appname = dom.createElement("name");
+				appname.appendChild(dom.createTextNode(fancyName));
+				root.insertAfter(appname, id);
+			}
+
+			if(root.firstChildElement("summary").isNull()) {
+				QDomElement appsummary = dom.createElement("summary");
+				appsummary.appendChild(dom.createTextNode(summary()));
+				root.insertAfter(appsummary, id);
 			}
 
 			String md(dom.toByteArray());
