@@ -479,7 +479,7 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 				" <description><p>" + description().xmlEncode() + "</p></description>\n";
 			DesktopFile df(i.value());
 			QHash<String, String> entries = df["Desktop Entry"];
-			for(auto dfe=df["Desktop Entry"].cbegin(), dfend=df["Destkop Entry"].cend(); dfe != dfend; ++dfe) {
+			for(auto dfe=entries.cbegin(), dfend=entries.cend(); dfe != dfend; ++dfe) {
 				if(dfe.key() == "Icon") {
 					String iconName = dfe.value();
 #ifdef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
