@@ -64,26 +64,22 @@ static bool finalizeMetadata(QDir const &d) {
 	for(String const &file : QList<String>{"primary", "filelists", "other", "appstream", "appstream-icons"}) {
 		String compressedFile = (file.startsWith("appstream")) ? file + "GZ" : file + "XZ";
 		String compressExtension = (file.startsWith("appstream")) ? ".gz" : ".xz";
+		String extension = (file == "appstream-icons") ? ".tar" : ".xml";
 		struct stat s, uncompressed;
-		stat(d.filePath(checksum[compressedFile] + "-" + file + ".xml" + compressExtension).toUtf8(), &s);
+		stat(d.filePath(checksum[compressedFile] + "-" + file + extension + compressExtension).toUtf8(), &s);
 		stat(d.filePath(file + ".xml").toUtf8(), &uncompressed);
 		repomdTs << "	<data type=\"" << file << "\">" << Qt::endl
 			<< "		<checksum type=\"sha256\">" << checksum[compressedFile] << "</checksum>" << Qt::endl
 			<< "		<open-checksum type=\"sha256\">" << checksum[file] << "</open-checksum>" << Qt::endl
-			<< "		<location href=\"repodata/" << checksum[compressedFile] << "-" << file << ((file == "appstream-icons") ? ".tar" : ".xml") + compressExtension + "\"/>" << Qt::endl
+			<< "		<location href=\"repodata/" << checksum[compressedFile] << "-" << file << extension + compressExtension + "\"/>" << Qt::endl
 			<< "		<timestamp>" << s.st_mtime << "</timestamp>" << Qt::endl
 			<< "		<size>" << s.st_size << "</size>" << Qt::endl
 			<< "		<open-size>" << uncompressed.st_size << "</open-size>" << Qt::endl
 			<< "	</data>" << Qt::endl;
+		QFile::remove(d.filePath(file + extension));
 	}
 	repomdTs << "</repomd>" << Qt::endl;
 	repomd.close();
-
-	QFile::remove(d.filePath("primary.xml"));
-	QFile::remove(d.filePath("filelists.xml"));
-	QFile::remove(d.filePath("other.xml"));
-	QFile::remove(d.filePath("appstream.xml"));
-	QFile::remove(d.filePath("appstream-icons.tar"));
 	return true;
 }
 
