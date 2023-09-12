@@ -21,4 +21,8 @@ target_link_libraries(rpmpp rpmio rpm Qt6::Core Qt6::Gui Qt6::Xml ${LIBARCHIVE_L
 add_executable(createmd createmd.cpp Sha256.cpp)
 target_link_libraries(createmd rpmpp rpmio rpm Qt6::Core Qt6::Gui Qt6::Xml ${LIBARCHIVE_LIBRARIES})
 
+add_executable(createmd-perfile createmd-perfile.cpp Sha256.cpp)
+target_link_libraries(createmd-perfile rpmpp rpmio rpm Qt6::Core Qt6::Gui Qt6::Xml ${LIBARCHIVE_LIBRARIES})
+
 install(TARGETS createmd DESTINATION bin)
+install(TARGETS createmd-perfile DESTINATION bin)
