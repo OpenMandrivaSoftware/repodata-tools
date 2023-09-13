@@ -296,8 +296,12 @@ static bool mergeMetadata(QDir &d, String const &origin="openmandriva") {
 	QDir rd(d.absolutePath() + "/repodata");
 	QDir pf(d.absolutePath() + "/repodata/perfile");
 	if(!pf.exists()) {
-		std::cerr << "No metadata in " << qPrintable(pf.absolutePath()) << std::endl;
-		return false;
+		// The directory doesn't contain any rpms or metadata. The right thing to do
+		// would be to throw an error, but createrepo_c just creates empty but valid
+		// XML files (containing the header with 0 packages), and dnf expects this
+		// behavior, so we have to copy it even if it's stupid.
+		d.mkdir("repodata", QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner|QFile::ReadGroup|QFile::ExeGroup|QFile::ReadOther|QFile::ExeOther);
+		d.mkdir("repodata/perfile", QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner|QFile::ReadGroup|QFile::ExeGroup|QFile::ReadOther|QFile::ExeOther);
 	}
 
 	QFile primary(rd.absoluteFilePath("primary.xml"));
