@@ -9,8 +9,11 @@
 #include <QHash>
 #include <QImage>
 #include <QBuffer>
+#include <QPainter>
+#include <QSvgRenderer>
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
 extern "C" {
 #include <archive.h>
@@ -220,6 +223,365 @@ String Rpm::sha256() {
 	return _sha256;
 }
 
+namespace {
+
+/// Case-insensitive endsWith for QByteArray/String (QByteArray has no Qt::CaseInsensitive overload).
+bool endsWithI(QByteArray const &haystack, QByteArrayView needle)
+{
+	if (haystack.size() < needle.size())
+		return false;
+	return haystack.right(needle.size()).compare(needle, Qt::CaseInsensitive) == 0;
+}
+
+/// Basename of Icon= without directory or known image extension.
+String iconBaseName(String iconName)
+{
+	if (iconName.contains('/'))
+		iconName = iconName.mid(iconName.lastIndexOf('/') + 1);
+	static const char *exts[] = {".png", ".svg", ".svgz", ".xpm", ".jpg", ".jpeg", ".gif"};
+	for (const char *ext : exts) {
+		const int el = std::strlen(ext);
+		if (iconName.size() > el && endsWithI(iconName, ext)) {
+			iconName = iconName.left(iconName.size() - el);
+			break;
+		}
+	}
+	return iconName;
+}
+
+bool isSizeDirName(QByteArray const &part)
+{
+	if (part == "scalable")
+		return true;
+	// NxN (e.g. 64x64)
+	const int x = part.indexOf('x');
+	if (x <= 0 || x >= part.size() - 1)
+		return false;
+	for (int i = 0; i < part.size(); ++i) {
+		if (i == x)
+			continue;
+		if (part.at(i) < '0' || part.at(i) > '9')
+			return false;
+	}
+	return true;
+}
+
+int sizeSortKey(QByteArray const &sizeDir)
+{
+	// Prefer common software-center sizes first.
+	if (sizeDir == "128x128")
+		return 0;
+	if (sizeDir == "64x64")
+		return 1;
+	if (sizeDir == "256x256")
+		return 2;
+	if (sizeDir == "48x48")
+		return 3;
+	if (sizeDir == "32x32")
+		return 4;
+	if (sizeDir == "512x512")
+		return 5;
+	if (sizeDir == "scalable")
+		return 100;
+	if (isSizeDirName(sizeDir) && sizeDir != "scalable") {
+		const int w = sizeDir.left(sizeDir.indexOf('x')).toInt();
+		return 50 + std::abs(64 - w);
+	}
+	return 200;
+}
+
+/// Rasterize SVG/SVGZ bytes to a PNG of the given pixel size. Empty on failure.
+QByteArray rasterizeSvgToPng(QByteArray const &data, int pixelSize)
+{
+	QSvgRenderer renderer(data);
+	if (!renderer.isValid())
+		return {};
+	QImage img(pixelSize, pixelSize, QImage::Format_ARGB32_Premultiplied);
+	img.fill(Qt::transparent);
+	QPainter painter(&img);
+	renderer.render(&painter);
+	painter.end();
+	if (img.isNull())
+		return {};
+	QBuffer buf;
+	if (!buf.open(QIODevice::WriteOnly))
+		return {};
+	if (!img.save(&buf, "PNG") || buf.data().isEmpty())
+		return {};
+	return buf.data();
+}
+
+/// True if component already has at least one icon of the given type.
+bool hasIconType(QDomElement const &root, char const *type)
+{
+	for (QDomElement icon = root.firstChildElement("icon"); !icon.isNull(); icon = icon.nextSiblingElement("icon")) {
+		if (icon.attribute("type") == QLatin1String(type))
+			return true;
+	}
+	return false;
+}
+
+/// Collect icon file paths from the RPM that match desktop/metainfo Icon=.
+QList<String> findRelevantIconFiles(QList<String> const &iconFiles, String const &iconName)
+{
+	QList<String> matches;
+	const String base = iconBaseName(iconName);
+
+	// Absolute path in Icon=
+	if (iconName.startsWith('/')) {
+		for (String const &i : iconFiles) {
+			if (i == iconName)
+				matches.append(i);
+		}
+		if (!matches.isEmpty())
+			return matches;
+	}
+
+	struct Candidate {
+		String path;
+		QByteArray sizeDir;
+		int prio = 200;
+	};
+	QList<Candidate> candidates;
+
+	for (String const &i : iconFiles) {
+		const QByteArray path = i;
+		const QByteArray fileName = path.mid(path.lastIndexOf('/') + 1);
+
+		// /usr/share/pixmaps/foo.png (or without extension)
+		if (path.startsWith("/usr/share/pixmaps/")) {
+			String fn = fileName;
+			String fnBase = iconBaseName(fn);
+			if (fnBase == base || fn == base || fn.startsWith(base + ".")) {
+				candidates.append({i, "64x64", 10});
+			}
+			continue;
+		}
+
+		if (!path.startsWith("/usr/share/icons/"))
+			continue;
+
+		// Expect .../<theme>/<size>/apps/<file> (also allow other contexts with lower priority)
+		const QList<QByteArray> parts = path.split('/');
+		// ["", "usr", "share", "icons", theme, size, context, file]
+		if (parts.size() < 8)
+			continue;
+
+		const QByteArray context = parts.at(parts.size() - 2);
+		const QByteArray sizeDir = parts.at(parts.size() - 3);
+		const String fnBase = iconBaseName(String(fileName));
+		if (fnBase != base && fileName != base && !fileName.startsWith(base + "."))
+			continue;
+		if (!isSizeDirName(sizeDir) && sizeDir != "scalable")
+			continue;
+
+		int prio = sizeSortKey(sizeDir);
+		if (context != "apps")
+			prio += 20; // prefer apps/ but accept actions etc.
+		candidates.append({i, sizeDir, prio});
+	}
+
+	std::sort(candidates.begin(), candidates.end(), [](Candidate const &a, Candidate const &b) {
+		return a.prio < b.prio;
+	});
+
+	// Prefer one entry per size bucket; keep PNG over SVG when same size.
+	QHash<QByteArray, String> bestBySize;
+	QHash<QByteArray, bool> bestIsPng;
+	for (Candidate const &c : candidates) {
+		const bool isPng = endsWithI(c.path, ".png");
+		const bool isSvg = endsWithI(c.path, ".svg") || endsWithI(c.path, ".svgz");
+		if (!isPng && !isSvg && !c.path.startsWith("/usr/share/pixmaps"))
+			continue;
+		if (!bestBySize.contains(c.sizeDir)) {
+			bestBySize.insert(c.sizeDir, c.path);
+			bestIsPng.insert(c.sizeDir, isPng);
+			continue;
+		}
+		if (isPng && !bestIsPng.value(c.sizeDir)) {
+			bestBySize[c.sizeDir] = c.path;
+			bestIsPng[c.sizeDir] = true;
+		}
+	}
+
+	// Prefer raster sizes; include scalable only if we have few/no PNGs.
+	QList<QByteArray> sizes = bestBySize.keys();
+	std::sort(sizes.begin(), sizes.end(), [](QByteArray const &a, QByteArray const &b) {
+		return sizeSortKey(a) < sizeSortKey(b);
+	});
+	for (QByteArray const &s : sizes) {
+		if (s == "scalable" && bestBySize.size() > 1)
+			continue; // we have at least one non-scalable; skip SVG unless alone
+		matches.append(bestBySize.value(s));
+	}
+	// If we only had scalable (skipped above when size>1 false), ensure we add it
+	if (matches.isEmpty() && bestBySize.contains("scalable"))
+		matches.append(bestBySize.value("scalable"));
+	if (matches.isEmpty()) {
+		for (QByteArray const &s : sizes)
+			matches.append(bestBySize.value(s));
+	}
+
+	return matches;
+}
+
+struct CachedIconEntry {
+	String archivePath; // e.g. 64x64/foo.png
+	QByteArray data;
+	int width = 64;
+	int height = 64;
+};
+
+/// Build cached icon blobs + metadata fields for AppStream.
+QList<CachedIconEntry> buildCachedIcons(QHash<String, QByteArray> const &iconData, String const &iconName)
+{
+	QList<CachedIconEntry> out;
+	const String base = iconBaseName(iconName);
+
+	for (auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
+		const QList<QByteArray> n = i.key().split('/');
+		String sizeDir;
+		if (i.key().startsWith("/usr/share/pixmaps/")) {
+			sizeDir = "64x64";
+		} else if (n.size() >= 3) {
+			sizeDir = n.at(n.size() - 3);
+		} else {
+			sizeDir = "64x64";
+		}
+
+		const bool isSvg = endsWithI(i.key(), ".svg") || endsWithI(i.key(), ".svgz");
+		CachedIconEntry entry;
+
+		if (isSvg || sizeDir == "scalable") {
+			// Always rasterize vectors into 64x64 PNG for the catalog cache.
+			QByteArray png = rasterizeSvgToPng(i.value(), 64);
+			if (png.isEmpty())
+				continue;
+			entry.archivePath = "64x64/" + base + ".png";
+			entry.data = png;
+			entry.width = 64;
+			entry.height = 64;
+		} else {
+			// Prefer PNG data as-is under NxN/basename.png
+			int w = 64;
+			if (isSizeDirName(sizeDir) && sizeDir != "scalable")
+				w = sizeDir.left(sizeDir.indexOf('x')).toInt();
+			if (w <= 0)
+				w = 64;
+			// If not PNG, try QImage convert
+			QByteArray payload = i.value();
+			if (!endsWithI(i.key(), ".png")) {
+				QImage img;
+				if (!img.loadFromData(payload) || img.isNull())
+					continue;
+				QBuffer buf;
+				if (!buf.open(QIODevice::WriteOnly) || !img.save(&buf, "PNG") || buf.data().isEmpty())
+					continue;
+				payload = buf.data();
+			}
+			if (payload.isEmpty())
+				continue;
+			entry.archivePath = String(QByteArray::number(w) + "x" + QByteArray::number(w)) + "/" + base + ".png";
+			entry.data = payload;
+			entry.width = w;
+			entry.height = w;
+		}
+
+		// De-duplicate by archive path (keep first / higher-priority caller order)
+		bool exists = false;
+		for (CachedIconEntry const &o : out) {
+			if (o.archivePath == entry.archivePath) {
+				exists = true;
+				break;
+			}
+		}
+		if (!exists)
+			out.append(entry);
+	}
+	return out;
+}
+
+/// Append stock + cached icon elements to a QDom component; fill *icons hash for the tarball.
+void addIconsToComponent(QDomDocument &dom, QDomElement &root, String const &iconName,
+			 QList<String> const &iconFiles, Rpm const *rpm, QHash<String, QByteArray> *icons)
+{
+	if (iconName.isEmpty())
+		return;
+
+	// Stock name: theme icon for software centers. Always emit for normal Icon=
+	// names (not absolute paths). Absolute Icon= paths are still cached as files.
+	const String stockName = iconBaseName(iconName);
+	if (!iconName.startsWith('/') && !stockName.isEmpty() && !stockName.contains('/') && !hasIconType(root, "stock")) {
+		QDomElement stock = dom.createElement("icon");
+		stock.setAttribute("type", "stock");
+		stock.appendChild(dom.createTextNode(stockName));
+		root.appendChild(stock);
+	}
+
+	if (!icons)
+		return;
+
+	// Always try to attach cached icons from the package when we can find files,
+	// even if remote/stock icons are already present in metainfo.
+	const QList<String> relevant = findRelevantIconFiles(iconFiles, iconName);
+	if (relevant.isEmpty())
+		return;
+
+	const QHash<String, QByteArray> iconData = rpm->extractFiles(relevant);
+	const QList<CachedIconEntry> cached = buildCachedIcons(iconData, iconName);
+	for (CachedIconEntry const &c : cached) {
+		icons->insert(c.archivePath, c.data);
+		// Avoid duplicate cached entries with same width/filename
+		bool have = false;
+		for (QDomElement icon = root.firstChildElement("icon"); !icon.isNull(); icon = icon.nextSiblingElement("icon")) {
+			if (icon.attribute("type") == QLatin1String("cached")
+			    && icon.attribute("width").toInt() == c.width
+			    && icon.text() == QString(c.archivePath.split('/').last())) {
+				have = true;
+				break;
+			}
+		}
+		if (have)
+			continue;
+		QDomElement icon = dom.createElement("icon");
+		icon.setAttribute("type", "cached");
+		icon.setAttribute("width", QString::number(c.width));
+		icon.setAttribute("height", QString::number(c.height));
+		icon.appendChild(dom.createTextNode(c.archivePath.split('/').last()));
+		root.appendChild(icon);
+	}
+}
+
+/// Desktop-only path: return XML snippets for icons and fill *icons.
+String iconXmlForDesktop(String const &iconName, QList<String> const &iconFiles, Rpm const *rpm,
+			 QHash<String, QByteArray> *icons)
+{
+	String md;
+	if (iconName.isEmpty())
+		return md;
+
+	const String stockName = iconBaseName(iconName);
+	if (!stockName.isEmpty() && !stockName.contains('/'))
+		md += " <icon type=\"stock\">" + stockName + "</icon>\n";
+
+	if (!icons)
+		return md;
+
+	const QList<String> relevant = findRelevantIconFiles(iconFiles, iconName);
+	if (relevant.isEmpty())
+		return md;
+
+	const QHash<String, QByteArray> iconData = rpm->extractFiles(relevant);
+	for (CachedIconEntry const &c : buildCachedIcons(iconData, iconName)) {
+		icons->insert(c.archivePath, c.data);
+		md += " <icon type=\"cached\" width=\"" + QByteArray::number(c.width) + "\" height=\""
+			+ QByteArray::number(c.height) + "\">" + c.archivePath.split('/').last() + "</icon>\n";
+	}
+	return md;
+}
+
+} // namespace
+
 String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 	if(icons)
 		icons->clear();
@@ -383,63 +745,11 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 				}
 
 				DesktopFile df(appstreams[desktopFile]);
-				QDomElement icon = root.firstChildElement("icon");
-				if(icon.isNull() && df.hasKey("Icon")) {
-					String iconName = df.value("Icon");
-#ifdef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
-					icon = dom.createElement("icon");
-					icon.setAttribute("type", "stock");
-					icon.appendChild(dom.createTextNode(iconName));
-					root.appendChild(icon);
-#endif
-					if(icons) {
-						QList<String> relevantIcons;
-						for(String const &i : iconFiles) {
-							if(i.startsWith("/usr/share/icons/") && (i.endsWith("/64x64/apps/" + iconName  + ".png") || i.endsWith("/128x128/apps/" + iconName + ".png")))
-								relevantIcons.append(i);
-						}
-						if(!relevantIcons.count()) {
-							// the spec says png icons are preferred, but vector is
-							// allowed, so if we can't find the PNGs, fall back
-							// to SVGs
-							for(String const &i : iconFiles) {
-								if(i.startsWith("/usr/share/icons/") && (i.endsWith("/scalable/apps/" + iconName  + ".svg") || i.endsWith("/scalable/apps/" + iconName + ".svgz")))
-									relevantIcons.append(i);
-							}
-						}
-						if(relevantIcons.count()) {
-							QHash<String,QByteArray> iconData = extractFiles(relevantIcons);
-							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
-								QList<QByteArray> n=i.key().split('/');
-								String size=n.at(n.length()-3);
-								String name;
-#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
-								if(size == "scalable") {
-									size = "64x64";
-									name = size + "/" + iconName + ".png";
-									QImage original;
-									original.loadFromData(i.value());
-									QBuffer converted;
-									original.save(&converted,  "PNG");
-									icons->insert(name, converted.data());
-								} else {
-#endif
-									name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').last();
-									icons->insert(name, i.value());
-#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
-								}
-#endif
-								String simpleSize=size.split('x').at(0);
-								icon = dom.createElement("icon");
-								icon.setAttribute("type", "cached");
-								icon.setAttribute("width", QString(simpleSize));
-								icon.setAttribute("height", QString(simpleSize));
-								icon.appendChild(dom.createTextNode(name.split('/').last()));
-								root.appendChild(icon);
-							}
-						}
-					}
-				}
+				// Always try to attach stock + cached icons from the package.
+				// Previously we only did this when metainfo had no <icon> at all,
+				// which left remote-only / incomplete icons without a local cache entry.
+				if (df.hasKey("Icon"))
+					addIconsToComponent(dom, root, df.value("Icon"), iconFiles, this, icons);
 				if (df.hasKey("Name"))
 					fancyName = df.value("Name");
 
@@ -457,6 +767,27 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 				}
 			} else
 				fancyName = name();
+
+			// If we still have no cached icons, try names from existing stock/remote
+			// icons or the component id (common when metainfo forgot Icon= but
+			// ships hicolor icons named after the app id).
+			if (icons && !hasIconType(root, "cached")) {
+				QStringList tryNames;
+				for (QDomElement ic = root.firstChildElement("icon"); !ic.isNull(); ic = ic.nextSiblingElement("icon")) {
+					if (ic.attribute("type") == QLatin1String("stock") && !ic.text().isEmpty())
+						tryNames << ic.text();
+				}
+				if (!id.isNull() && !id.text().isEmpty())
+					tryNames << id.text() << id.text().section(QLatin1Char('.'), -1);
+				tryNames << QString(name());
+				for (QString const &n : tryNames) {
+					if (n.isEmpty() || n.contains(QLatin1Char('/')))
+						continue;
+					addIconsToComponent(dom, root, String(n.toUtf8()), iconFiles, this, icons);
+					if (hasIconType(root, "cached"))
+						break;
+				}
+			}
 
 			// Some badly done appdata files miss name and summary
 			if(root.firstChildElement("name").isNull()) {
@@ -505,56 +836,7 @@ String Rpm::appstreamMd(QHash<String,QByteArray> *icons) const {
 			QHash<String, String> entries = df["Desktop Entry"];
 			for(auto dfe=entries.cbegin(), dfend=entries.cend(); dfe != dfend; ++dfe) {
 				if(dfe.key() == "Icon") {
-					String iconName = dfe.value();
-#ifdef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
-					md += " <icon type=\"stock\">" + iconName + "</icon>\n";
-#endif
-					if(icons) {
-						QList<String> relevantIcons;
-						for(String const &i : iconFiles) {
-							if(i.startsWith("/usr/share/icons/") && (i.endsWith("/64x64/apps/" + iconName  + ".png") || i.endsWith("/128x128/apps/" + iconName + ".png")))
-								relevantIcons.append(i);
-						}
-						if(!relevantIcons.count()) {
-							// the spec says png icons are preferred, but vector is
-							// allowed, so if we can't find the PNGs, fall back
-							// to SVGs
-							for(String const &i : iconFiles) {
-								if(i.startsWith("/usr/share/icons/") && (i.endsWith("/scalable/apps/" + iconName  + ".svg") || i.endsWith("/scalable/apps/" + iconName + ".svgz")))
-									relevantIcons.append(i);
-							}
-						}
-						if(relevantIcons.count()) {
-							QHash<String,QByteArray> iconData = extractFiles(relevantIcons);
-							for(auto i = iconData.cbegin(), e = iconData.cend(); i != e; ++i) {
-								QList<QByteArray> n=i.key().split('/');
-								String size=n.at(n.length()-3);
-								String name;
-#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
-								if(size == "scalable") {
-									size = "64x64";
-									name = size + "/" + iconName + ".png";
-									QImage original;
-									original.loadFromData(i.value());
-									QBuffer converted;
-									original.save(&converted,  "PNG");
-									icons->insert(name, converted.data());
-								} else {
-#endif
-									name = size + "/" + iconName + "." + n.at(n.length()-1).split('.').last();
-									icons->insert(name, i.value());
-#ifndef DO_WHAT_IS_SANE_AND_NOT_WHAT_APPSTREAM_DOES
-								}
-#endif
-								if(size == "scalable") {
-									md += " <icon type=\"cached\" width=\"64\" height=\"64\">" + name.split('/').last() + "</icon>\n";
-								} else {
-									String simpleSize=size.split('x').at(0);
-									md += " <icon type=\"cached\" width=\"" + simpleSize + "\" height=\"" + simpleSize + "\">" + name.split('/').last() + "</icon>\n";
-								}
-							}
-						}
-					}
+					md += iconXmlForDesktop(dfe.value(), iconFiles, this, icons);
 				} else if(dfe.key() == "Name") {
 					md += " <name>" + dfe.value().xmlEncode() + "</name>\n";
 				} else if(dfe.key() == "GenericName") {

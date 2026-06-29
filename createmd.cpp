@@ -7,6 +7,7 @@
 #include <QGuiApplication>
 #include <QCommandLineParser>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QDomDocument>
 #include <QTextStream>
@@ -517,14 +518,50 @@ static bool updateMetadata(String const &path) {
 		archive_entry *e;
 		while(archive_read_next_header(in, &e) == ARCHIVE_OK) {
 			char const * fn = archive_entry_pathname(e);
-			if(ignore.contains(fn)) {
+			// Normalize legacy/corrupt paths like "64x64/128x128/foo.png" → "128x128/foo.png"
+			QString path = QString::fromUtf8(fn);
+			while (path.startsWith(QLatin1String("./")))
+				path = path.mid(2);
+			const QStringList parts = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+			QString normalized = path;
+			if (parts.size() >= 2) {
+				// Use the last size-like directory + basename
+				QString sizeDir;
+				const QString base = parts.last();
+				for (int i = parts.size() - 2; i >= 0; --i) {
+					const QString &p = parts.at(i);
+					if (p == QLatin1String("scalable") || (p.contains(QLatin1Char('x')) && p.front().isDigit())) {
+						sizeDir = p;
+						break;
+					}
+				}
+				if (!sizeDir.isEmpty())
+					normalized = sizeDir + QLatin1Char('/') + base;
+			}
+			const QString baseName = QFileInfo(normalized).fileName();
+			// iconsToRemove from XML is often the bare filename; iconsToAdd keys are "NxN/file.png"
+			if (ignore.contains(fn) || ignore.contains(normalized) || ignore.contains(baseName)
+			    || ignore.contains(QString::fromUtf8(fn))) {
+				archive_read_data_skip(in);
+				continue;
+			}
+			// Skip if we're replacing this archive path with a new blob
+			bool replaced = false;
+			for (String const &k : iconsToAdd.keys()) {
+				if (QString(k) == normalized || QFileInfo(QString(k)).fileName() == baseName) {
+					replaced = true;
+					break;
+				}
+			}
+			if (replaced) {
 				archive_read_data_skip(in);
 				continue;
 			}
 			size_t size = archive_entry_size(e);
 			char buf[size];
 			int r = archive_read_data(in, &buf, size);
-			out.addFile(fn, QByteArray(buf, size));
+			Q_UNUSED(r)
+			out.addFile(String(normalized.toUtf8()), QByteArray(buf, size));
 		}
 
 		for(QHash<String,QByteArray>::ConstIterator it=iconsToAdd.begin(); it!=iconsToAdd.end(); ++it)
